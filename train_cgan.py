@@ -5,11 +5,11 @@ import gc
 import glob
 import h5py
 import tensorflow as tf
-from tensorflow.keras import layers
+from tensorflow.keras import layers, regularizers
 from tensorflow.keras.optimizers import Adam
 from tqdm import tqdm
 
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler,StandardScaler
 
 
 
@@ -36,6 +36,29 @@ def build_generator_model():
 
     return model
 
+def build_generator_model_dnn():
+    model = tf.keras.Sequential(name = "Generator")
+
+    model.add(tf.keras.Input(shape = (GEN_DIM,)))
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="gen_layer1", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+    model.add(layers.BatchNormalization())
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="gen_layer2", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+    model.add(layers.BatchNormalization())
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="gen_layer3", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+    model.add(layers.BatchNormalization())
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="gen_layer4", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+    model.add(layers.BatchNormalization())
+    
+    model.add(layers.Dense(len(train_features), activation = 'tanh'))
+
+    return model
 
 def build_discriminator_model():
     model = tf.keras.Sequential(name = "Discriminator")
@@ -58,11 +81,36 @@ def build_discriminator_model():
     model.add(layers.Dropout(0.2))
     model.add(layers.Dense(1, activation = 'sigmoid'))
 
-    opt = Adam(lr=0.0002, beta_1=0.5)
+    opt = Adam(lr=0.005, beta_1=0.5)
     model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
 
     return model
 
+
+def build_discriminator_model_dnn():
+    model = tf.keras.Sequential(name = "Discriminator")
+
+    model.add(tf.keras.Input(shape = (DISC_DIM,)))
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="disc_layer1", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="disc_layer2", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="disc_layer3", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+
+    model.add(layers.Dense(256, kernel_initializer = 'glorot_uniform', name="disc_layer4", kernel_regularizer=regularizers.L2(0.0001)))
+    model.add(layers.LeakyReLU(alpha = 0.2))
+
+    model.add(layers.Dropout(0.2))
+    model.add(layers.Dense(1, activation = 'sigmoid'))
+
+    opt = Adam(lr=0.0003, beta_1=0.5)
+    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
+
+    return model
 
 def create_gan(discriminator, generator, latent_dim):
     discriminator.trainable=False
@@ -71,7 +119,8 @@ def create_gan(discriminator, generator, latent_dim):
     x = generator(layers.Concatenate(axis=-1, name="GenInput")([gan_input,cond_input]))
     gan_output= discriminator(layers.Concatenate(axis=-1, name="DiscInput")([x,cond_input]))
     gan= tf.keras.Model(inputs=[gan_input,cond_input], outputs=gan_output, name="GAN")
-    gan.compile(loss='binary_crossentropy', optimizer='adam')
+    gen_opt = Adam(lr=0.0002, beta_1=0.5)
+    gan.compile(loss='binary_crossentropy', optimizer=gen_opt)
     return gan
 
 
@@ -159,10 +208,22 @@ gpu_devices = tf.config.list_physical_devices('GPU')
 print(gpu_devices)
 print("**********************************")
 
+config = tf.compat.v1.ConfigProto(gpu_options = 
+                         tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.8)
+# device_count = {'GPU': 1}
+)
+config.gpu_options.allow_growth = True
+session = tf.compat.v1.Session(config=config)
+tf.compat.v1.keras.backend.set_session(session)
 
-for device in gpu_devices:
-    tf.config.experimental.per_process_gpu_memory_fraction = 0.3
-    tf.config.experimental.set_memory_growth(device, True) 
+# for device in gpu_devices:
+#     tf.config.experimental.per_process_gpu_memory_fraction = 0.3
+#     tf.config.experimental.set_memory_growth(device, True) 
+#     # try:
+#     #     tf.config.experimental.set_virtual_device_configuration(
+#     #         gpu_devices[0],[tf.config.experimental.VirtualDeviceConfiguration(memory_limit=5120)])
+#     # except RuntimeError as e:
+#     #     print(e)
 
 
 datapath = "~/cGAN_dataset/"
@@ -180,25 +241,28 @@ print(df_bg_sb[train_features].head())
 
 X_raw = np.array(df_bg_sb[train_features])
 print("Shape of training set: ", X_raw.shape)
+# np.save("./X_raw.npy", X_raw)
+
 scaler = MinMaxScaler((-1,1)).fit(X_raw)
+# scaler = StandardScaler().fit(X_raw)
 X_train = scaler.transform(X_raw)
 
 Xc_raw = np.array(df_bg_sb[condition_features])
 print("Shape of conditional data: ", Xc_raw.shape)
-scaler_mjj = MinMaxScaler((0,1)).fit(Xc_raw.reshape(-1,1))
+scaler_mjj = MinMaxScaler((-1,1)).fit(Xc_raw.reshape(-1,1))
 Xc_train = scaler_mjj.transform(Xc_raw.reshape(-1,1))
 
-NOISE_DIM = 64 # 128
+NOISE_DIM = 12 #64 # 128
 GEN_DIM = NOISE_DIM + len(condition_features)
 DISC_DIM = len(train_features) + len(condition_features)
 
 
-generator = build_generator_model()
+generator = build_generator_model_dnn()
 generator.summary()
 print()
 
 
-discriminator = build_discriminator_model()
+discriminator = build_discriminator_model_dnn()
 discriminator.summary()
 print()
 
@@ -208,6 +272,8 @@ gan_model.summary()
 
 X_real, X_c, y_real = generate_real_samples(X_train, Xc_train, 50)
 discriminator.train_on_batch(np.hstack([X_real, X_c]), y_real)
+
+# np.save("./X_train.npy", X_train)
 
 # ################################################################################
 # #                    MNIST DataSet example 
